@@ -6,6 +6,7 @@ import re
 import urllib.request
 import zipfile
 import warnings
+import shutil,gzip
 
 
 class COVID19_measures(object):
@@ -98,7 +99,7 @@ class COVID19_measures(object):
         self.__store_raw_data     = kwargs.get('store_raw_data',       False)
         self.__index_name_level   = kwargs.get('index_name_level',     self.__measurelevel)
 
-        self.__max_date_check     = 40 # how many days back from today, used so far only in HIT-COVID, which has upload date in their filenames
+        self.__max_date_check     = 60 # how many days back from today, used so far only in HIT-COVID, which has upload date in their filenames
         
         self.__datasource         = kwargs.get('datasource','CCCSL').upper()
         self.__datasourceinfo     = {   'CCCSL':  {'dateformat':          '%Y-%m-%d',
@@ -126,24 +127,25 @@ class COVID19_measures(object):
                                                    'DownloadURL':         'https://www.acaps.org/sites/acaps/files/resources/files/acaps_covid19_government_measures_dataset_0.xlsx',
                                                    'DatafileName':        'ACAPS_covid19_measures.xlsx',
                                                    'USName':              'United States of America',
-                                                   'DatafileReadOptions': {'sheet_name':'Database'}},
-                                        'WHOPHSM':{'dateformat':          '%d/%m/%Y',
-                                                   'Country':             'country_territory_area',
+                                                   'DatafileReadOptions': {'sheet_name':'Dataset'}},
+                                        'WHOPHSM':{'dateformat':          '%Y-%m-%d',
+                                                   'Country':             'COUNTRY_TERRITORY_AREA',
                                                    'CountryCodes':        'iso',
-                                                   'DownloadURL':         'https://www.who.int/docs/default-source/documents/phsm/{DATE}-phsm-who-int.zip',
+                                                   'DownloadURL':         'https://extranet.who.int/xmart-api/odata/NCOV_PHM/CLEAN_PHSM',
                                                    'DownloadURL_dateformat': '%Y%m%d',
-                                                   'DownloadFilename':    'who_phsm.zip',
-                                                   'DatafileName':        'who_phsm.xlsx',
+                                                   'DownloadFilename':    'who_phsm.json',
+                                                   'DatafileName':        'who_phsm.csv',
                                                    'MaxMeasureLevel':      2,
                                                    'USName':              'United States Of America',
                                                    'DatafileReadOptions': {'encoding':'latin-1'}},
                                         'CORONANET':{'dateformat':        '%Y-%m-%d',
-                                                   'DownloadURL':         'http://coronanet-project.org/data/coronanet_release.csv',
+                                                   'DownloadURL':         'https://github.com/saudiwin/corona_tscs/raw/master/data/CoronaNet/data_bulk/coronanet_release.csv.gz',
+                                                   'DownloadFilename':    'coronanet_release.csv.gz',
                                                    'DatafileName':        'coronanet_release.csv',
                                                    'MaxMeasureLevel':     3,
                                                    'Country':             'country',
                                                    'USName':              'United States of America',
-                                                   'DatafileReadOptions': {}},
+                                                   'DatafileReadOptions': {'encoding':'latin-1'}},
                                         'HITCOVID':{'dateformat':         '%Y-%m-%d',
                                                    'DownloadURL':         'https://github.com/HopkinsIDD/hit-covid/raw/master/data/hit-covid-longdata.csv',
                                                    'DatafileName':        'hit-covid-longdata.csv',
@@ -239,19 +241,29 @@ class COVID19_measures(object):
             download_savefile = self.__datasourceinfo[self.__datasource]['USDatafileName']
             urllib.request.urlretrieve(download_url, download_savefile)
 
-        # download for WHO PHSM comes as zipfile. need to extract file first
+        # download for WHO PHSM/CORONANET comes as zipfile. need to extract file first
         if self.__datasource == 'WHOPHSM':
-            who_archive = zipfile.ZipFile(download_savefile)
-            who_filename = None
-            for fileinfo in who_archive.infolist():
-                if self.filetype(filename = fileinfo.filename) in ['CSV','XLSX']:
-                    who_archive.extract(fileinfo)
-                    who_filename = fileinfo.filename
-            if not who_filename is None:
-                os.rename(who_filename, self.__datasourceinfo['WHOPHSM']['DatafileName'])
-            else:
-                raise IOError('did not find appropriate files in ZIP archive')
-        
+            # they seem to have changed their filestructure, before it was zipfile ...
+            #data_archive = zipfile.ZipFile(download_savefile)
+            #data_filename = None
+            #for fileinfo in data_archive.infolist():
+                #if self.filetype(filename = fileinfo.filename) in ['CSV','XLSX']:
+                    #data_archive.extract(fileinfo)
+                    #data_filename = fileinfo.filename
+            #if not data_filename is None:
+                #os.rename(data_filename, self.__datasourceinfo['WHOPHSM']['DatafileName'])
+            #else:
+                #raise IOError('did not find appropriate files in ZIP archive')
+                
+            # ... now its a JSON file wrapped around CSV data
+            jsondata = pd.read_json(self.__datasourceinfo[self.__datasource]['DownloadFilename'])
+            pd.DataFrame(list(jsondata['value'].values), columns = jsondata['value'].values[0].keys()).to_csv(self.__datasourceinfo[self.__datasource]['DatafileName'])
+            
+        elif self.__datasource == 'CORONANET':
+            with gzip.open(self.__datasourceinfo['CORONANET']['DownloadFilename'], 'rb') as f_in:
+                with open(self.__datasourceinfo['CORONANET']['DatafileName'], 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                    
         
         
     def convertDate(self, datestr, inputformat = None, outputformat = None):
@@ -382,41 +394,41 @@ class COVID19_measures(object):
         
         
         elif self.__datasource == 'WHOPHSM':
-            self.__data = readdata[[self.__countrycolumn,'date_start','who_category']].copy(deep = True)
+            self.__data = readdata[[self.__countrycolumn,'DATE_START','WHO_CATEGORY']].copy(deep = True)
             self.__data.columns = [self.__countrycolumn,'Date','Measure_L1']
-            self.__data['Measure_L2'] = (readdata['who_subcategory'].astype(str) + ' -- ' + readdata['who_measure'].astype(str)).apply(CleanWHOName)
+            self.__data['Measure_L2'] = (readdata['WHO_SUBCATEGORY'].astype(str) + ' -- ' + readdata['WHO_MEASURE'].astype(str)).apply(CleanWHOName)
             
             # some cleanup
             self.__data.dropna(subset = ['Date'], inplace = True)
-            self.__data['Date'] = self.__data['Date'].dt.strftime(self.__dateformat)
+            self.__data['Date'] = self.__data['Date'].apply(self.convertDate)
             
             # resolve US states
             if self.__resolve_US_states:
                 self.__data.drop(self.__data[self.__data[self.__countrycolumn] == self.__USname].index, inplace = True)
                 
                 nationwide_data = None
-                for index, datarow in readdata[readdata[self.__countrycolumn] == self.__USname].dropna(subset = ['date_start']).iterrows():
-                    if not datarow['area_covered'] is np.nan:
-                        states = [state.strip() for state in str(datarow['area_covered']).split(',')]
-                        if datarow['admin_level'] == 'state':
+                for index, datarow in readdata[readdata[self.__countrycolumn] == self.__USname].dropna(subset = ['DATE_START']).iterrows():
+                    if not datarow['AREA_COVERED'] is np.nan:
+                        states = [state.strip() for state in str(datarow['AREA_COVERED']).split(',')]
+                        if datarow['ADMIN_LEVEL'] == 'state':
                             for state in states:
                                 if state in self.__USstateList:
                                     db_entry = pd.DataFrame({self.__countrycolumn: 'US - {}'.format(state),
-                                                            'Date': datarow['date_start'].strftime(self.__dateformat),
-                                                            'Measure_L1': str(datarow['who_category']),
-                                                            'Measure_L2': CleanWHOName(str(datarow['who_subcategory']) + ' -- ' + str(datarow['who_measure']))
+                                                            'Date': datarow['DATE_START'].strftime(self.__dateformat),
+                                                            'Measure_L1': str(datarow['WHO_CATEGORY']),
+                                                            'Measure_L2': CleanWHOName(str(datarow['WHO_SUBCATEGORY']) + ' -- ' + str(datarow['who_measure']))
                                                             }, index = [0])
                                     self.__data = self.addDF(self.__data, db_entry)
-                    elif datarow['admin_level'] == 'national':
+                    elif datarow['ADMIN_LEVEL'] == 'national':
                         nationwide_data = self.addDF(nationwide_data, pd.DataFrame(datarow.to_dict(), index = [0]))
                 
                 us_states = self.__data[self.__data[self.__countrycolumn].str.startswith('US - ')][self.__countrycolumn].unique()
                 for state in us_states:
                     for index, datarow in nationwide_data.iterrows():
                         db_entry = pd.DataFrame({self.__countrycolumn: state,
-                                                    'Date': datarow['date_start'].strftime(self.__dateformat),
-                                                    'Measure_L1': str(datarow['who_category']),
-                                                    'Measure_L2': CleanWHOName(str(datarow['who_subcategory']) + ' -- ' + str(datarow['who_measure']))
+                                                    'Date': datarow['DATE_START'].strftime(self.__dateformat),
+                                                    'Measure_L1': str(datarow['WHO_CATEGORY']),
+                                                    'Measure_L2': CleanWHOName(str(datarow['WHO_SUBCATEGORY']) + ' -- ' + str(datarow['WHO_MEASURE']))
                                                     }, index = [0])
                         self.__data = self.addDF(self.__data, db_entry)
                         
