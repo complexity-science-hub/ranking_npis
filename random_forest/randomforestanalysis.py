@@ -209,13 +209,15 @@ class RandomForestAnalysis(object):
         nsplits      = self._nsplits
         maxsamples   = self._maxsamples
         n_estimators = self._n_estimators
-
-        countries = np.array(self.predictors.index.unique("Country"))
-        np.random.shuffle(countries)
-    
+   
         results = pd.DataFrame()
 
         t = self._timeshift
+
+        Xshifted,_ = shift_outcome(X,y,max(self._timeshift),shift_date="y")        
+        countries = np.array(Xshifted.index.unique("Country"))
+        np.random.shuffle(countries)
+        del Xshifted
 
         for p in itertools.product(self._minsamplesleaf,self._maxtreedepth,self._maxfeatures):
         
